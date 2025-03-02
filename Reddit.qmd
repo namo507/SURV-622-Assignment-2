@@ -1,7 +1,107 @@
 ```{r}
-library(RedditExtractoR)
+library(RedditExtractoR)  # For extracting Reddit data
+library(dplyr)            # For data manipulation
+library(lubridate)        # For date/time handling
+library(ggplot2)          # For data visualization
+library(tidytext)         # For text mining
+library(wordcloud)        # For creating word clouds
+library(stringr)          # For string manipulation
+```
 
-df = find_thread_urls(keywords = "illegal", subreddit = "Immigration", sort_by="relevance", period = "month")
+```{r}
+# Define our search parameters
+subreddits <- c("Android", "ios", "iphone", "samsung", "apple", 
+                "AndroidQuestions", "AppleWatch", "Smartphones", 
+                "tech", "technology")
+
+keywords <- c("iOS vs Android", "Apple vs Samsung", "iPhone vs Galaxy",
+              "Mobile operating systems", "Smartphone features", 
+              "User experience", "App ecosystem", "Security and privacy", 
+              "Customization", "Brand loyalty")
+
+# Displaying our search parameters
+cat("Subreddits to analyze:", paste(subreddits, collapse=", "), "\n\n")
+cat("Keywords to search:", paste(keywords, collapse=", "))
+
+# Example code for collecting data using RedditExtractoR
+# First, collect URLs from the subreddits based on keywords
+reddit_urls <- data.frame()
+
+# Loop through each subreddit to collect URLs
+for (sub in subreddits) {
+  cat("Collecting from r/", sub, "\n", sep="")
+  
+  # Try to collect URLs for each keyword in the subreddit
+  for (kw in keywords) {
+    cat("  Searching for:", kw, "\n")
+    
+    # Use find_thread_urls to get post URLs matching the keyword in the subreddit
+    tryCatch({
+      urls <- find_thread_urls(keywords = kw, 
+                              subreddit = sub, 
+                              sort_by = "relevance", 
+                              period = "all")
+      
+      if (!is.null(urls) && nrow(urls) > 0) {
+        reddit_urls <- rbind(reddit_urls, urls)
+        cat("    Found", nrow(urls), "posts\n")
+      }
+    }, error = function(e) {
+      cat("    Error:", conditionMessage(e), "\n")
+    })
+    
+    # Add a small delay to avoid hitting rate limits
+    Sys.sleep(2)
+  }
+  
+  # Larger delay between subreddits
+  Sys.sleep(5)
+}
+```
+```{r}
+# Remove duplicates
+reddit_urls <- distinct(reddit_urls, url, .keep_all = TRUE)
+
+cat("Total unique URLs collected:", nrow(reddit_urls), "\n")
+
+# Now get the content of each thread
+reddit_data <- data.frame()
+
+# Process in small batches to avoid API issues
+batch_size <- 5
+num_batches <- ceiling(nrow(reddit_urls) / batch_size)
+
+for (i in 1:num_batches) {
+  start_idx <- (i-1) * batch_size + 1
+  end_idx <- min(i * batch_size, nrow(reddit_urls))
+  
+  cat("Processing batch", i, "of", num_batches, "(URLs", start_idx, "to", end_idx, ")\n")
+  
+  batch_urls <- reddit_urls$url[start_idx:end_idx]
+  
+  # Get thread content
+  tryCatch({
+    batch_content <- get_thread_content(batch_urls)
+    
+    if (!is.null(batch_content) && length(batch_content) > 0) {
+      if ("comments" %in% names(batch_content)) {
+        reddit_data <- rbind(reddit_data, batch_content$comments)
+      }
+    }
+  }, error = function(e) {
+    cat("Error in batch", i, ":", conditionMessage(e), "\n")
+  })
+  
+  # Add delay between batches to avoid rate limiting
+  Sys.sleep(5)
+}
+```
+
+## Data Collection
+
+```{r}
+# Examine the initial dataset
+cat("Total posts collected:", nrow(reddit_data), "\n")
 ```
 
 ```{r}
@@ -17,6 +117,6 @@ df$text
 
 
 ```{r keywords}
-immigration_subreddits = find_subreddits('H1B')
+immigration_subreddits = find_subreddits('Apple vs Samsung')
 immigration_subreddits
 ```
