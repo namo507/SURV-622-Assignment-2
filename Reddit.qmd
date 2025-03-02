@@ -1,2 +1,259 @@
-## 1.
+```{r}
+library(RedditExtractoR)  # For extracting Reddit data
+library(dplyr)            # For data manipulation
+library(lubridate)        # For date/time handling
+library(ggplot2)          # For data visualization
+library(tidytext)         # For text mining
+library(wordcloud)        # For creating word clouds
+library(stringr)          # For string manipulation
+```
 
+```{r}
+# Define our search parameters
+subreddits <- c("Android", "ios", "iphone", "samsung", "apple", 
+                "AndroidQuestions", "AppleWatch", "Smartphones", 
+                "tech", "technology")
+
+keywords <- c("iOS vs Android", "Apple vs Samsung", "iPhone vs Galaxy",
+              "Mobile operating systems", "Smartphone features", 
+              "User experience", "App ecosystem", "Security and privacy", 
+              "Customization", "Brand loyalty")
+
+# Displaying our search parameters
+cat("Subreddits to analyze:", paste(subreddits, collapse=", "), "\n\n")
+cat("Keywords to search:", paste(keywords, collapse=", "))
+
+# Example code for collecting data using RedditExtractoR
+# First, collect URLs from the subreddits based on keywords
+reddit_urls <- data.frame()
+
+# Loop through each subreddit to collect URLs
+for (sub in subreddits) {
+  cat("Collecting from r/", sub, "\n", sep="")
+  
+  # Try to collect URLs for each keyword in the subreddit
+  for (kw in keywords) {
+    cat("  Searching for:", kw, "\n")
+    
+    # Use find_thread_urls to get post URLs matching the keyword in the subreddit
+    tryCatch({
+      urls <- find_thread_urls(keywords = kw, 
+                              subreddit = sub, 
+                              sort_by = "relevance", 
+                              period = "all")
+      
+      if (!is.null(urls) && nrow(urls) > 0) {
+        reddit_urls <- rbind(reddit_urls, urls)
+        cat("    Found", nrow(urls), "posts\n")
+      }
+    }, error = function(e) {
+      cat("    Error:", conditionMessage(e), "\n")
+    })
+    
+    # Add a small delay to avoid hitting rate limits
+    Sys.sleep(2)
+  }
+  
+  # Larger delay between subreddits
+  Sys.sleep(5)
+}
+```
+```{r}
+# Remove duplicates
+reddit_urls <- distinct(reddit_urls, url, .keep_all = TRUE)
+
+cat("Total unique URLs collected:", nrow(reddit_urls), "\n")
+
+# Now get the content of each thread
+reddit_data <- data.frame()
+
+# Process in small batches to avoid API issues
+batch_size <- 5
+num_batches <- ceiling(nrow(reddit_urls) / batch_size)
+
+for (i in 1:num_batches) {
+  start_idx <- (i-1) * batch_size + 1
+  end_idx <- min(i * batch_size, nrow(reddit_urls))
+  
+  cat("Processing batch", i, "of", num_batches, "(URLs", start_idx, "to", end_idx, ")\n")
+  
+  batch_urls <- reddit_urls$url[start_idx:end_idx]
+  
+  # Get thread content
+  tryCatch({
+    batch_content <- get_thread_content(batch_urls)
+    
+    if (!is.null(batch_content) && length(batch_content) > 0) {
+      if ("comments" %in% names(batch_content)) {
+        reddit_data <- rbind(reddit_data, batch_content$comments)
+      }
+    }
+  }, error = function(e) {
+    cat("Error in batch", i, ":", conditionMessage(e), "\n")
+  })
+  
+  # Add delay between batches to avoid rate limiting
+  Sys.sleep(5)
+}
+```
+
+## Data Collection
+
+```{r}
+# Examine the initial dataset
+cat("Total posts collected:", nrow(reddit_data), "\n")
+
+# Simulating the manual inspection process
+# In practice, you would review a sample of posts to determine which are relevant
+set.seed(456)
+inspection_sample <- reddit_data[sample(nrow(reddit_data), 50), ]
+
+# Define a function to determine if a post is relevant
+is_relevant <- function(text) {
+  keywords <- c("ios", "android", "apple", "samsung", "iphone", "galaxy", 
+                "smartphone", "mobile", "phone", "app")
+  any(sapply(keywords, function(keyword) grepl(keyword, tolower(text))))
+}
+
+# Apply the relevance function to filter posts
+reddit_data$relevant <- sapply(reddit_data$text, is_relevant)
+cleaned_data <- reddit_data[reddit_data$relevant, ]
+
+# Report cleaning results
+cat("Posts after cleaning:", nrow(cleaned_data), "\n")
+cat("Posts removed:", nrow(reddit_data) - nrow(cleaned_data), "\n")
+```
+
+
+## Data Cleaning and Preparation
+
+
+```{r}
+# Posts per day
+posts_by_day <- cleaned_data %>%
+  count(date) %>%
+  arrange(date)
+
+# Plot posts over time
+ggplot(posts_by_day, aes(x = date, y = n)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Number of Posts by Day",
+       x = "Date",
+       y = "Number of Posts")
+
+# Posts by time of day
+posts_by_time <- cleaned_data %>%
+  count(time_of_day) %>%
+  arrange(desc(n))
+
+ggplot(posts_by_time, aes(x = reorder(time_of_day, -n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Posts by Time of Day",
+       x = "Time of Day",
+       y = "Number of Posts")
+
+# Posts by subreddit
+posts_by_subreddit <- cleaned_data %>%
+  count(subreddit) %>%
+  arrange(desc(n))
+
+ggplot(posts_by_subreddit, aes(x = reorder(subreddit, -n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Posts by Subreddit",
+       x = "Subreddit",
+       y = "Number of Posts")
+```
+
+## Descriptive Analysis of the Posts
+
+```{r}
+# Prepare text for analysis
+text_data <- cleaned_data %>%
+  select(post_id, text) %>%
+  unnest_tokens(word, text)
+
+# Count most common words
+word_counts <- text_data %>%
+  count(word, sort = TRUE)
+
+# Display top words
+head(word_counts, 20)
+
+# Remove stop words and recalculate
+data(stop_words)
+text_data_clean <- text_data %>%
+  anti_join(stop_words, by = "word")
+
+word_counts_clean <- text_data_clean %>%
+  count(word, sort = TRUE)
+
+# Display top words after removing stop words
+head(word_counts_clean, 20)
+
+# Create a word cloud
+wordcloud(words = word_counts_clean$word, 
+          freq = word_counts_clean$n, 
+          max.words = 100,
+          random.order = FALSE,
+          colors = brewer.pal(8, "Dark2"))
+
+```
+
+## Hand-Coding Process
+
+```{r}
+# Simulate the random selection of posts for hand-coding
+# Assuming there are 3 group members (n=3), we need 300 posts
+set.seed(789)
+n_members <- 4
+posts_per_member <- 100
+total_posts_to_code <- n_members * posts_per_member
+
+# Randomly select posts for coding
+posts_to_code <- cleaned_data %>%
+  sample_n(total_posts_to_code)
+
+# Simulate the hand-coding process
+# In reality, each member would code their assigned posts
+set.seed(101)
+posts_to_code$stance <- sample(c("favor_ios", "favor_android", "neutral", "irrelevant"),
+                               nrow(posts_to_code), replace = TRUE, 
+                               prob = c(0.35, 0.35, 0.2, 0.1))
+
+# Summarize the coding results
+stance_summary <- posts_to_code %>%
+  count(stance) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Display the results
+stance_summary
+
+# Visualize the distribution
+ggplot(stance_summary, aes(x = stance, y = n, fill = stance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Distribution of Hand-Coded Post Stances",
+       x = "Stance",
+       y = "Count") +
+  theme(legend.position = "none") +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), 
+            vjust = -0.5)
+```
+
+
+```{r}
+# Example: Compare iOS vs Android sentiment across different subreddits
+subreddit_stance <- posts_to_code %>%
+  group_by(subreddit, stance) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  filter(stance %in% c("favor_ios", "favor_android"))
+
+ggplot(subreddit_stance, aes(x = subreddit, y = count, fill = stance)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "iOS vs Android Sentiment by Subreddit",
+       x = "Subreddit",
+       y = "Count",
+       fill = "Stance")
+```
