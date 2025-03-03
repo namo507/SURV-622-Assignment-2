@@ -72,7 +72,8 @@ reddit_data <- data.frame()
 # Process in small batches to avoid API issues
 batch_size <- 5
 num_batches <- ceiling(nrow(reddit_urls) / batch_size)
-
+```
+```{r}
 for (i in 1:num_batches) {
   start_idx <- (i-1) * batch_size + 1
   end_idx <- min(i * batch_size, nrow(reddit_urls))
