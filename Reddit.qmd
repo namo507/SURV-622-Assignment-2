@@ -26,7 +26,8 @@ cat("Keywords to search:", paste(keywords, collapse=", "))
 # Example code for collecting data using RedditExtractoR
 # First, collect URLs from the subreddits based on keywords
 reddit_urls <- data.frame()
-
+```
+```{r}
 # Loop through each subreddit to collect URLs
 for (sub in subreddits) {
   cat("Collecting from r/", sub, "\n", sep="")
@@ -58,6 +59,7 @@ for (sub in subreddits) {
   Sys.sleep(5)
 }
 ```
+
 ```{r}
 # Remove duplicates
 reddit_urls <- distinct(reddit_urls, url, .keep_all = TRUE)
