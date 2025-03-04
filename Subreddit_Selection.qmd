@@ -1,0 +1,161 @@
+---
+title: "Assignment2 622"
+format: pdf
+editor: visual
+---
+
+```{r warning = FALSE, message=FALSE, include=FALSE}
+library(RedditExtractoR)
+library(tidytext)
+library(dplyr)
+library(pander)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+library(topicmodels)
+library(stringr)
+library(quanteda)
+library(kableExtra)
+```
+
+## Find Subreddits
+
+```{r}
+# Search for subreddits related to phone preferences
+phone_sub_df <- find_subreddits("iOS Android phone")
+phone_sub_df <- data.frame(phone_sub_df)
+phone_sub_df_clean <- phone_sub_df %>%
+  select(subreddit, 
+         title, 
+         description, 
+         subscribers, 
+         date_utc)
+```
+
+```{r}
+# Format and examine the data
+phone_sub_df_clean$date_utc <- as.Date(phone_sub_df_clean$date_utc)
+rownames(phone_sub_df_clean) <- 1:nrow(phone_sub_df_clean)
+str(head(phone_sub_df_clean, 1))
+pander(dim(phone_sub_df))
+pander(dim(phone_sub_df_clean))
+```
+
+```{r}
+# Visualize subscriber counts
+phone_sub_df_clean %>%
+  ggplot(aes(x = subreddit, y = subscribers)) +
+  geom_bar(stat = 'identity',
+           color = 'black',
+           fill = 'steelblue') +
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0,
+                                   hjust = 1,
+                                   size = 2)) +
+  scale_y_continuous(breaks = pretty_breaks(n=5)) +
+  labs(title = "Subscriber Counts for Phone-Related Subreddits",
+       x = "Subreddit",
+       y = "Number of Subscribers")
+```
+
+```{r warning = FALSE, message=FALSE}
+# Function to clean subreddit descriptions
+desc_clean <- function(x){
+  tk <- tibble(line = 1, text = x)
+  tk <- tk %>% 
+    unnest_tokens(word, text) %>% 
+    anti_join(stop_words)
+  return(tolower(str_c(tk$word, collapse = ' ')))
+}
+
+# Clean the descriptions
+phone_sub_df_clean <- phone_sub_df_clean %>%
+  rowwise() %>%
+  mutate(cleaned_description = desc_clean(description)) %>%
+  select(-description) %>%
+  ungroup()
+```
+
+```{r}
+# Function to check if subreddit is related to phone preferences
+check_phone_preference <- function(x){
+  keywords <- c('iOS',
+                'Android',
+                'Apple',
+                'Samsung',
+                'iPhone',
+                'Galaxy',
+                'smartphone',
+                'mobile',
+                'phone',
+                'app',
+                'operating system',
+                'ecosystem',
+                'customization',
+                'security',
+                'privacy',
+                'user experience',
+                'interface'
+                )
+  pattern <- paste0("\\b(", paste(keywords, collapse = "|"), ")\\b")
+  any(str_detect(tolower(x), pattern = pattern))
+}
+
+# Filter for relevant subreddits
+phone_sub_df_clean <- phone_sub_df_clean %>% 
+  rowwise() %>%
+  mutate(phone_related = if_else(check_phone_preference(cleaned_description), TRUE, FALSE)) %>%
+  ungroup()
+```
+
+```{r}
+# Select top relevant subreddits
+subreddit_df <- phone_sub_df_clean %>%
+  filter(phone_related == TRUE) %>%
+  arrange(desc(subscribers)) %>% 
+  head(n=10)
+
+# Display in a table
+subreddit_df[c(1:4)] %>%
+  pander(caption = "Subreddits Related to Phone Preferences")
+
+# Visualize top subreddits by subscriber count
+subreddit_df %>% 
+  ggplot(aes(x = reorder(subreddit, subscribers), y = subscribers/1000000)) +
+  geom_bar(stat = 'identity',
+           fill = 'steelblue') +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Top Phone-Related Subreddits by Subscriber Count",
+       x = "Subreddit",
+       y = "Subscribers (in millions)")
+```
+
+## Analyzing Subreddit Descriptions
+
+```{r}
+# Extract key terms from descriptions
+subreddit_terms <- subreddit_df %>%
+  select(subreddit, cleaned_description) %>%
+  unnest_tokens(word, cleaned_description) %>%
+  count(subreddit, word, sort = TRUE) %>%
+  group_by(subreddit) %>%
+  top_n(5, n) %>%
+  arrange(subreddit, desc(n))
+
+# Display key terms for each subreddit
+subreddit_terms %>%
+  pander(caption = "Top 5 Terms in Each Subreddit's Description")
+
+# Visualize key terms
+subreddit_terms %>%
+  ggplot(aes(x = reorder(word, n), y = n, fill = subreddit)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ subreddit, scales = "free_y") +
+  coord_flip() +
+  labs(title = "Most Common Words in Subreddit Descriptions",
+       x = NULL,
+       y = "Word Frequency") +
+  theme_minimal()
+```
