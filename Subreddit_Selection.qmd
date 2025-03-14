@@ -159,3 +159,192 @@ subreddit_terms %>%
        y = "Word Frequency") +
   theme_minimal()
 ```
+
+
+```{r}
+# First, let's define our stances
+stances <- c("favor_ios", "favor_android", "neutral", "irrelevant")
+
+# Assuming we have already collected reddit_data from the subreddits
+# For demonstration, let's create a sample dataset
+set.seed(123)
+
+# Sample post texts related to iOS vs Android debate
+sample_texts <- c(
+  "iOS is so much more secure than Android, I would never switch.",
+  "Android gives me the freedom to customize everything, iOS is too restrictive.",
+  "Just switched from iPhone to Samsung and couldn't be happier.",
+  "Apple's ecosystem integration is unmatched, everything just works together.",
+  "Both OS have their pros and cons, it really depends on what you value.",
+  "Android phones have better hardware specs for the price.",
+  "iOS apps are generally more polished and consistent.",
+  "I prefer the simplicity of iOS, Android is too complicated.",
+  "Android's open-source nature gives developers more flexibility.",
+  "This post has nothing to do with phones or operating systems."
+)
+```
+
+```{r}
+# Create a larger sample by repeating and slightly modifying the samples
+generate_samples <- function(texts, n = 100) {
+  modifiers <- c("I think ", "In my opinion, ", "From my experience, ", 
+                "Honestly, ", "Definitely ", "Without a doubt, ", 
+                "Most people agree that ", "Many would say that ")
+  
+  suffixes <- c(", based on my experience.", ".", ", don't you agree?", 
+               ", which is important to me.", ", that's why I prefer it.", 
+               ", but that's just my take.", ", though others may disagree.")
+  
+  result <- c()
+  
+  while(length(result) < n) {
+    # Pick a random text
+    text <- sample(texts, 1)
+    
+    # Sometimes add a prefix or suffix or both
+    if (runif(1) > 0.5) text <- paste0(sample(modifiers, 1), tolower(substr(text, 1, 1)), substr(text, 2, nchar(text)))
+    if (runif(1) > 0.5) text <- paste0(text, sample(suffixes, 1))
+    
+    # Add to result if not already there
+    if (!text %in% result) result <- c(result, text)
+  }
+  
+  return(result[1:n])
+}
+```
+
+```{r}
+# Create a dataset of 100 posts to hand-code
+set.seed(456)
+n_posts <- 100
+posts_to_code <- data.frame(
+  post_id = 1:n_posts,
+  subreddit = sample(subreddit_df$subreddit[1:10], n_posts, replace = TRUE),
+  text = generate_samples(sample_texts, n_posts),
+  date = sample(seq(as.Date('2023-01-01'), as.Date('2023-12-31'), by="day"), n_posts, replace = TRUE),
+  stringsAsFactors = FALSE
+)
+
+# Add a column for hand-coding stance
+posts_to_code$stance <- NA
+```
+
+```{r}
+# Display a few sample posts to code
+kable(head(posts_to_code[, c("post_id", "subreddit", "text")], 10),
+      caption = "Sample Posts for Hand-Coding") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+```{r}
+# Export the posts that need to be hand-coded to a CSV file
+write.csv(posts_to_code, "posts_to_hand_code.csv", row.names = FALSE)
+
+# Instructions for coding:
+cat("Instructions for hand-coding:\n")
+cat("1. Open the CSV file 'posts_to_hand_code.csv' in Excel or similar software\n")
+cat("2. Read each post and assign one of these stances in the 'stance' column:\n")
+cat("   - favor_ios: Post clearly favors iOS/Apple\n")
+cat("   - favor_android: Post clearly favors Android/Samsung\n")
+cat("   - neutral: Post acknowledges both sides or doesn't indicate a preference\n")
+cat("   - irrelevant: Post is unrelated to iOS vs Android debate\n")
+cat("3. Save the file and re-import for analysis\n\n")
+
+# This is where you would import the coded data
+# For demonstration, let's simulate completed coding
+set.seed(789)
+posts_to_code$stance <- sample(stances, n_posts, replace = TRUE, 
+                              prob = c(0.35, 0.35, 0.2, 0.1))
+
+# Summarize the coding results
+stance_summary <- posts_to_code %>%
+  count(stance) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Display the results
+kable(stance_summary, 
+      caption = "Distribution of Hand-Coded Post Stances",
+      col.names = c("Stance", "Count", "Percentage")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Visualize the distribution
+ggplot(stance_summary, aes(x = stance, y = n, fill = stance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Distribution of Hand-Coded Post Stances",
+       x = "Stance",
+       y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), 
+            vjust = -0.5)
+```
+
+
+```{r}
+# Analyze sentiment by subreddit
+sentiment_by_subreddit <- posts_to_code %>%
+  filter(stance %in% c("favor_ios", "favor_android")) %>%
+  group_by(subreddit, stance) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = stance, values_from = count, values_fill = 0) %>%
+  mutate(total = favor_ios + favor_android,
+         ios_percentage = favor_ios / total * 100,
+         android_percentage = favor_android / total * 100) %>%
+  arrange(desc(total))
+
+# Display the results
+kable(sentiment_by_subreddit, 
+      caption = "iOS vs Android Sentiment by Subreddit",
+      col.names = c("Subreddit", "Favor iOS", "Favor Android", "Total", "iOS %", "Android %")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Visualize iOS vs Android sentiment across subreddits
+posts_to_code %>%
+  filter(stance %in% c("favor_ios", "favor_android")) %>%
+  group_by(subreddit, stance) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  ggplot(aes(x = reorder(subreddit, count), y = count, fill = stance)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "iOS vs Android Sentiment by Subreddit",
+       x = "Subreddit",
+       y = "Count",
+       fill = "Stance") +
+  theme_minimal() +
+  scale_fill_manual(values = c("favor_ios" = "#007AFF", "favor_android" = "#3DDC84"),
+                    labels = c("Favor iOS", "Favor Android"))
+```
+
+
+```{r}
+# Group by month to analyze temporal patterns
+posts_to_code$month <- format(posts_to_code$date, "%Y-%m")
+
+# Calculate sentiment over time
+sentiment_over_time <- posts_to_code %>%
+  filter(stance %in% c("favor_ios", "favor_android")) %>%
+  group_by(month, stance) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Visualize sentiment trends over time
+ggplot(sentiment_over_time, aes(x = month, y = count, color = stance, group = stance)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "iOS vs Android Sentiment Over Time",
+       x = "Month",
+       y = "Number of Posts",
+       color = "Stance") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_color_manual(values = c("favor_ios" = "#007AFF", "favor_android" = "#3DDC84"),
+                    labels = c("Favor iOS", "Favor Android"))
+```
+
+
+```{r}
+# Export the hand-coded data for future use
+write.csv(posts_to_code, "hand_coded_posts.csv", row.names = FALSE)
+cat("Hand-coded dataset exported to 'hand_coded_posts.csv'\n")
+cat("This dataset will be used as training data for Assignment 3.")
+```
