@@ -162,14 +162,13 @@ subreddit_terms %>%
 
 
 ```{r}
-# First, let's define our stances
+# Define the stances for classification
 stances <- c("favor_ios", "favor_android", "neutral", "irrelevant")
 
-# Assuming we have already collected reddit_data from the subreddits
-# For demonstration, let's create a sample dataset
-set.seed(123)
+# Create sample data with 100 rows of posts
+set.seed(123) # For reproducibility
 
-# Sample post texts related to iOS vs Android debate
+# Sample iOS vs Android related texts
 sample_texts <- c(
   "iOS is so much more secure than Android, I would never switch.",
   "Android gives me the freedom to customize everything, iOS is too restrictive.",
@@ -182,61 +181,48 @@ sample_texts <- c(
   "Android's open-source nature gives developers more flexibility.",
   "This post has nothing to do with phones or operating systems."
 )
-```
 
-```{r}
-# Create a larger sample by repeating and slightly modifying the samples
-generate_samples <- function(texts, n = 100) {
-  modifiers <- c("I think ", "In my opinion, ", "From my experience, ", 
-                "Honestly, ", "Definitely ", "Without a doubt, ", 
-                "Most people agree that ", "Many would say that ")
-  
-  suffixes <- c(", based on my experience.", ".", ", don't you agree?", 
-               ", which is important to me.", ", that's why I prefer it.", 
-               ", but that's just my take.", ", though others may disagree.")
-  
+# Generate variations of these texts to create 100 unique posts
+generate_variations <- function(texts, n = 100) {
   result <- c()
-  
   while(length(result) < n) {
-    # Pick a random text
     text <- sample(texts, 1)
-    
-    # Sometimes add a prefix or suffix or both
-    if (runif(1) > 0.5) text <- paste0(sample(modifiers, 1), tolower(substr(text, 1, 1)), substr(text, 2, nchar(text)))
-    if (runif(1) > 0.5) text <- paste0(text, sample(suffixes, 1))
-    
-    # Add to result if not already there
+    # Add slight variations
+    if (runif(1) > 0.5) {
+      prefix <- sample(c("I think ", "In my opinion, ", "Honestly, "), 1)
+      text <- paste0(prefix, tolower(substr(text, 1, 1)), substr(text, 2, nchar(text)))
+    }
     if (!text %in% result) result <- c(result, text)
   }
-  
   return(result[1:n])
 }
-```
 
-```{r}
-# Create a dataset of 100 posts to hand-code
-set.seed(456)
-n_posts <- 100
-posts_to_code <- data.frame(
-  post_id = 1:n_posts,
-  subreddit = sample(subreddit_df$subreddit[1:10], n_posts, replace = TRUE),
-  text = generate_samples(sample_texts, n_posts),
-  date = sample(seq(as.Date('2023-01-01'), as.Date('2023-12-31'), by="day"), n_posts, replace = TRUE),
+# Create the dataframe with 100 posts
+posts_df <- data.frame(
+  post_id = 1:100,
+  subreddit = sample(c("Android", "ios", "iphone", "apple", "samsung"), 100, replace = TRUE),
+  text = generate_variations(sample_texts, 100),
   stringsAsFactors = FALSE
 )
 
-# Add a column for hand-coding stance
-posts_to_code$stance <- NA
-```
+# Add empty stance column for classification
+posts_df$stance <- NA
 
-```{r}
-# Display a few sample posts to code
-kable(head(posts_to_code[, c("post_id", "subreddit", "text")], 10),
-      caption = "Sample Posts for Hand-Coding") %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
-```
+# View a few sample rows
+head(posts_df, 5)
 
+# Export to CSV for manual classification
+write.csv(posts_df, "posts_to_classify.csv", row.names = FALSE)
 
-```{r}
-
+cat("Instructions for classifying posts:\n")
+cat("1. Open 'posts_to_classify.csv' in Excel or a similar application\n")
+cat("2. Read each post in the 'text' column\n")
+cat("3. In the 'stance' column, enter one of these classifications:\n")
+cat("   - favor_ios: Post clearly favors iOS/Apple\n")
+cat("   - favor_android: Post clearly favors Android/Samsung\n")
+cat("   - neutral: Post acknowledges both sides or doesn't indicate a preference\n")
+cat("   - irrelevant: Post is unrelated to iOS vs Android debate\n")
+cat("4. Save the file when done\n")
+cat("5. Import back into R for analysis with:\n")
+cat("   classified_posts <- read.csv('posts_to_classify.csv')\n")
 ```
