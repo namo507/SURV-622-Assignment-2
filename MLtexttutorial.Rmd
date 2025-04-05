@@ -45,7 +45,7 @@ library(dplyr)
 We downloaded the data from SemEval2016 website, and the details of the dataset can be seen in [SemEval2016 Task 6](https://aclanthology.org/S16-1003/). 
 
 ```{r}
-semeval_stance <- read.csv('handcode.csv', stringsAsFactors = FALSE,)
+semeval_stance <- read.csv('handcode.CSV', stringsAsFactors = FALSE,)
 semeval_stance$ID <- 1:nrow(semeval_stance)
 semeval_stance$ID <- as.character(semeval_stance$ID) # Need to make this character for later joins
 semeval_stance$stance <- as.factor(semeval_stance$stance) #Convert Char to Factor
@@ -188,13 +188,12 @@ tweet_dtm_df = as.data.frame(as.matrix(tweet_dtm))
 # Add the ID, Stance variable to the data frame
 tweet_dtm_df$ID = semeval_stance$ID
 tweet_dtm_df$stance = semeval_stance$stance
-
 ```
 
 
 The full data contains the ID variable (which we will use to make our train/test split in the next section), as well as our features (each word) and the label (True/False for whether the topic was on cell biology or not)
 
-Here, you might consider doing a bit more feature engineering and data manipulation. For example, you might consider scaling the variables, in order to avoid the influence of more frequent words. You can try cleaning the text data a bit more, to remove certain words that might be stop words in this specific context. You can also consider adding additional variables, such as length of tweet in number of words. 
+Here, one might consider doing a bit more feature engineering and data manipulation. For example, one might consider scaling the variables, in order to avoid the influence of more frequent words. You can try cleaning the text data a bit more, to remove certain words that might be stop words in this specific context. You can also consider adding additional variables, such as length of tweet in number of words. 
 
 ## Train and Test Split
 
@@ -367,4 +366,124 @@ plot(xgb_model)
 ```{r}
 predicted_classes <- predict(xgb_model, test, type = "raw")
 confusionMatrix(predicted_classes, test$stance)
+```
+
+
+
+```{r}
+## After creating the document-term matrix and before model training
+
+# 1. Further dimensionality reduction - reduce sparsity more aggressively
+tweet_dtm = removeSparseTerms(tweet_dtm, 0.98)  # More aggressive sparsity reduction (98% instead of 99%)
+
+# 2. Add additional text features that might help with classification
+tweet_df = as.data.frame(as.matrix(tweet_dtm))
+
+# Add text length as a feature
+tweet_df$text_length <- nchar(semeval_stance$text)
+
+# Add count of specific keywords related to platforms
+tweet_df$ios_count <- str_count(tolower(semeval_stance$text), "ios|iphone|apple|mac")
+tweet_df$android_count <- str_count(tolower(semeval_stance$text), "android|google|samsung|galaxy")
+
+# Add the ID, Stance variables
+tweet_df$ID = semeval_stance$ID
+tweet_df$stance = semeval_stance$stance
+```
+
+```{r}
+# Create a one-vs-all approach for each class
+library(ROSE)
+
+# Function to create binary classifier dataset
+create_binary_dataset <- function(data, positive_class) {
+  binary_data <- data
+  binary_data$binary_target <- ifelse(data$stance == positive_class, "pos", "neg")
+  binary_data$binary_target <- as.factor(binary_data$binary_target)
+  return(binary_data[, c(names(binary_data)[names(binary_data) != "stance"], "binary_target")])
+}
+
+# Create balanced datasets for each class
+classes <- levels(train_reduced$stance)
+binary_models <- list()
+
+for (cls in classes) {
+  # Create binary dataset
+  binary_data <- create_binary_dataset(train_reduced, cls)
+  
+  # Apply ROSE to balance
+  balanced_data <- ROSE(binary_target ~ ., data = binary_data, seed = 1)$data
+  
+  # Train model for this class
+  binary_models[[cls]] <- train(
+    binary_target ~ .,
+    data = balanced_data,
+    method = "xgbTree",
+    trControl = ctrl,
+    tuneGrid = xgb_grid
+  )
+}
+
+# Function for prediction using one-vs-all
+predict_ova <- function(models, newdata) {
+  # Get probability for each class being positive
+  probs <- sapply(names(models), function(cls) {
+    # Create binary version of test data
+    binary_test <- newdata
+    # Predict probability of "pos" class
+    predict(models[[cls]], newdata = binary_test, type = "prob")$pos
+  })
+  
+  # For each observation, select class with highest probability
+  pred_classes <- apply(probs, 1, function(x) names(models)[which.max(x)])
+  return(factor(pred_classes, levels = names(models)))
+}
+```
+
+
+```{r}
+# 5. Use PCA for dimensionality reduction
+# This step is optional but might help with the small dataset
+preprocess_steps <- c("center", "scale", "pca")
+
+# 6. Modify XGBoost parameters for small dataset
+xgb_grid <- expand.grid(
+  nrounds = c(50, 100),
+  max_depth = c(2, 3),           # Smaller max_depth to prevent overfitting
+  eta = c(0.05, 0.1),            # Smaller learning rate
+  gamma = c(0, 0.1),             # Regularization parameter
+  colsample_bytree = c(0.6, 0.8),
+  min_child_weight = c(1, 3),    # Helps prevent overfitting
+  subsample = c(0.7, 0.9)        # Controls the portion of data used
+)
+
+# 7. Modify control parameters for small dataset
+ctrl <- trainControl(
+  method = "repeatedcv",         # More robust cross-validation
+  number = 5,                    # 5-fold CV
+  repeats = 3,                   # Repeat 3 times
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  # Use caret's built-in sampling method instead of SMOTE
+  sampling = "smote",            # Alternative: "down", "up", or "rose"
+  summaryFunction = multiClassSummary
+)
+
+# 8. For XGBoost, try class weights to handle imbalance
+class_weights <- ifelse(levels(train$stance) == "irrelevant", 
+                       1, 
+                       table(train$stance)["irrelevant"] / table(train$stance))
+names(class_weights) <- levels(train$stance)
+
+# Train the XGBoost model with these modifications
+xgb_model <- train(
+  stance ~ .,
+  data = train,  # Use regular training data, as sampling is handled by trainControl
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = xgb_grid,
+  metric = "Balanced_Accuracy",  # Focus on balanced accuracy instead of overall accuracy
+  preProcess = preprocess_steps,
+  verbose = TRUE
+)
 ```
