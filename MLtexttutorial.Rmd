@@ -474,16 +474,226 @@ class_weights <- ifelse(levels(train$stance) == "irrelevant",
                        1, 
                        table(train$stance)["irrelevant"] / table(train$stance))
 names(class_weights) <- levels(train$stance)
+```
 
-# Train the XGBoost model with these modifications
-xgb_model <- train(
-  stance ~ .,
-  data = train,  # Use regular training data, as sampling is handled by trainControl
-  method = "xgbTree",
-  trControl = ctrl,
-  tuneGrid = xgb_grid,
-  metric = "Balanced_Accuracy",  # Focus on balanced accuracy instead of overall accuracy
-  preProcess = preprocess_steps,
-  verbose = TRUE
+
+**Model Comparison Final Code:**
+
+```{r}
+# Prepare the dataset with improved features
+# Use the previously created tweet_df that includes additional features
+
+# Create train/test split with stratification to maintain class distributions
+set.seed(123)
+train_indices <- createDataPartition(tweet_df$stance, p = 0.8, list = FALSE)
+train_improved <- tweet_df[train_indices, ] %>% select(-ID)
+test_improved <- tweet_df[-train_indices, ] %>% select(-ID)
+
+# Check class distributions
+cat("Training set class distribution:\n")
+table(train_improved$stance)
+
+cat("\nTest set class distribution:\n")
+table(test_improved$stance)
+
+# 1. KNN MODEL WITH BALANCED APPROACH
+# ===================================
+
+# Setup control parameters for balanced KNN
+knn_ctrl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  classProbs = TRUE,
+  sampling = "down",
+  summaryFunction = multiClassSummary
 )
+
+# Train KNN model with tuning
+knn_model <- train(
+  stance ~ ., 
+  data = train_improved,
+  method = "knn",
+  trControl = knn_ctrl,
+  preProcess = c("center", "scale"),
+  tuneGrid = expand.grid(k = c(3, 5, 7, 9, 11)),
+  metric = "Balanced_Accuracy"
+)
+
+# Print KNN results
+cat("\n\n======= KNN MODEL RESULTS =======\n")
+print(knn_model)
+plot(knn_model)
+
+# Make predictions with KNN
+knn_preds <- predict(knn_model, test_improved)
+cat("\nKNN Confusion Matrix:\n")
+knn_conf_matrix <- confusionMatrix(knn_preds, test_improved$stance)
+print(knn_conf_matrix)
+
+# 2. SVM MODEL WITH IMPROVED PARAMETERS
+# ====================================
+
+# Setup SVM parameters
+svm_ctrl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  classProbs = TRUE,
+  sampling = "down",
+  summaryFunction = multiClassSummary
+)
+
+# Train SVM with improved parameters
+svm_model <- train(
+  stance ~ .,
+  data = train_improved,
+  method = "svmLinear",
+  preProcess = c("center", "scale"),
+  trControl = svm_ctrl,
+  tuneGrid = expand.grid(C = c(0.01, 0.1, 0.5, 1, 5, 10)),
+  metric = "Balanced_Accuracy"
+)
+
+# Print SVM results
+cat("\n\n======= SVM MODEL RESULTS =======\n")
+print(svm_model)
+plot(svm_model)
+
+# Make predictions with SVM
+svm_preds <- predict(svm_model, test_improved)
+cat("\nSVM Confusion Matrix:\n")
+svm_conf_matrix <- confusionMatrix(svm_preds, test_improved$stance)
+print(svm_conf_matrix)
+
+# 3. XGBOOST WITH ONE-VS-ALL APPROACH
+# ==================================
+
+# First, ensure we have the necessary control and grid parameters
+xgb_ctrl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  sampling = "down",  # Use down-sampling for easier computation
+  summaryFunction = multiClassSummary
+)
+
+xgb_grid <- expand.grid(
+  nrounds = c(50, 100),
+  max_depth = c(2, 3),
+  eta = c(0.05, 0.1),
+  gamma = c(0, 0.1),
+  colsample_bytree = c(0.7),
+  min_child_weight = c(1),
+  subsample = c(0.8)
+)
+
+# Create train_reduced for use with one-vs-all approach
+# This should have a reduced feature set to avoid errors in ROSE
+# Let's use only the top features based on information gain
+
+# Estimate feature importance
+library(FSelector)
+weights <- information.gain(stance ~ ., data = train_improved)
+selected_attrs <- cutoff.k(weights, k = min(50, ncol(train_improved) - 1))  # Top 50 features or less
+train_reduced <- train_improved[, c(selected_attrs, "stance")]
+test_reduced <- test_improved[, c(selected_attrs, "stance")]
+
+# Train XGBoost directly (without one-vs-all approach)
+xgb_direct <- train(
+  stance ~ .,
+  data = train_reduced,
+  method = "xgbTree",
+  trControl = xgb_ctrl,
+  tuneGrid = xgb_grid,
+  metric = "Balanced_Accuracy",
+  verbose = FALSE
+)
+
+# Print XGBoost results
+cat("\n\n======= XGBOOST MODEL RESULTS =======\n")
+print(xgb_direct)
+plot(xgb_direct)
+
+# Make predictions with XGBoost
+xgb_preds <- predict(xgb_direct, test_reduced)
+cat("\nXGBoost Confusion Matrix:\n")
+xgb_conf_matrix <- confusionMatrix(xgb_preds, test_reduced$stance)
+print(xgb_conf_matrix)
+
+# Now let's try the one-vs-all approach for XGBoost
+classes <- levels(train_reduced$stance)
+binary_models <- list()
+
+for (cls in classes) {
+  # Create binary dataset
+  binary_data <- create_binary_dataset(train_reduced, cls)
+  
+  # Apply ROSE to balance
+  set.seed(123) # For reproducibility
+  
+  # Use try-catch to handle potential errors with ROSE
+  balanced_data <- tryCatch({
+    ROSE(binary_target ~ ., data = binary_data, seed = 1)$data
+  }, error = function(e) {
+    # If ROSE fails, use downsampling instead
+    message("ROSE failed for class ", cls, ". Using downsampling instead.")
+    ovun.sample(binary_target ~ ., data = binary_data, method = "under", N = min(table(binary_data$binary_target)) * 2)$data
+  })
+  
+  # Train model for this class
+  binary_models[[cls]] <- train(
+    binary_target ~ .,
+    data = balanced_data,
+    method = "xgbTree",
+    trControl = xgb_ctrl,
+    tuneGrid = xgb_grid,
+    verbose = FALSE
+  )
+}
+
+# Make predictions using one-vs-all approach
+ova_preds <- predict_ova(binary_models, test_reduced)
+cat("\nXGBoost One-vs-All Confusion Matrix:\n")
+ova_conf_matrix <- confusionMatrix(ova_preds, test_reduced$stance)
+print(ova_conf_matrix)
+
+# 4. COMPARE ALL MODELS
+# ====================
+
+# Extract metrics for comparison
+get_metrics <- function(cm, model_name) {
+  data.frame(
+    Model = model_name,
+    Accuracy = cm$overall["Accuracy"],
+    Balanced_Accuracy = cm$overall["Balanced Accuracy"],
+    Kappa = cm$overall["Kappa"]
+  )
+}
+
+model_comparison <- rbind(
+  get_metrics(knn_conf_matrix, "KNN"),
+  get_metrics(svm_conf_matrix, "SVM"),
+  get_metrics(xgb_conf_matrix, "XGBoost"),
+  get_metrics(ova_conf_matrix, "XGBoost-OVA")
+)
+
+cat("\n\n======= MODEL COMPARISON =======\n")
+print(model_comparison)
+
+# Visualize model comparison
+library(ggplot2)
+ggplot(model_comparison, aes(x = Model, y = Balanced_Accuracy, fill = Model)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.3f", Balanced_Accuracy)), vjust = -0.5) +
+  labs(title = "Model Performance Comparison",
+       y = "Balanced Accuracy") +
+  theme_minimal() +
+  ylim(0, max(model_comparison$Balanced_Accuracy) * 1.1)
+
+# Identify the best model
+best_model <- model_comparison[which.max(model_comparison$Balanced_Accuracy), ]
+cat("\nBest model: ", best_model$Model, " with balanced accuracy: ", best_model$Balanced_Accuracy, "\n")
 ```
