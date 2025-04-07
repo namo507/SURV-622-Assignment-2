@@ -424,14 +424,28 @@ for (cls in classes) {
   )
 }
 
-# Function for prediction using one-vs-all
+# Function for prediction using one-vs-all approach
 predict_ova <- function(models, newdata) {
   # Get probability for each class being positive
   probs <- sapply(names(models), function(cls) {
-    # Create binary version of test data
-    binary_test <- newdata
+    # Create binary version of test data (without modifying the original)
+    # We don't need to add the binary_target column for prediction
+    
     # Predict probability of "pos" class
-    predict(models[[cls]], newdata = binary_test, type = "prob")$pos
+    # Make sure we're only requesting probability for existing classes
+    tryCatch({
+      pred_probs <- predict(models[[cls]], newdata = newdata, type = "prob")
+      if("pos" %in% colnames(pred_probs)) {
+        return(pred_probs$pos)
+      } else {
+        # If "pos" column doesn't exist, return zeros
+        return(rep(0, nrow(newdata)))
+      }
+    }, error = function(e) {
+      # If prediction fails, log the error and return zeros
+      message("Error predicting for class ", cls, ": ", e$message)
+      return(rep(0, nrow(newdata)))
+    })
   })
   
   # For each observation, select class with highest probability
@@ -697,3 +711,5 @@ ggplot(model_comparison, aes(x = Model, y = Balanced_Accuracy, fill = Model)) +
 best_model <- model_comparison[which.max(model_comparison$Balanced_Accuracy), ]
 cat("\nBest model: ", best_model$Model, " with balanced accuracy: ", best_model$Balanced_Accuracy, "\n")
 ```
+
+
